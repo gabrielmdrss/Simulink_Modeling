@@ -1,0 +1,115 @@
+clear; clc;
+run('load_constants.m'); 
+
+% 1.CÓDIGO LADDER (Texto)
+% =========================================================================
+% Teste: Lógica Mista (Segurança + Timer + Bypass)
+% Lógica: ( (I0 AND I1) OR I2 ) -> TON T0 (50) -> Q0
+% =========================================================================
+
+source_code = {
+    % === RUNG 1: Entrada (CTU - Contador C0) ===
+    % Meta: 3 Carros
+    'LD',   'I0', '';
+    'CTU',  'C0', '3'; 
+    'OUT',  'Q0', '';   % Q0 Acende quando lotar (3)
+
+    % === RUNG 2: Saída (CTD - Contador C0) ===
+    'LD',   'I1', '';
+    'CTD',  'C0', '3';
+    'OUT',  'Q1', '';   % Q1 Acende quando vazio (0)
+    
+    % === RUNG 3: Reset ===
+    'LD',   'I2', '';
+    'RSTC', 'C0', '';
+    
+    'END',  '',   '';
+};
+
+% 2.COMPILADOR
+% Transforma a lista 'source_code' no vetor 'Program' usando as constantes
+
+% Inicializa memória limpa
+Program = zeros(1, MEM_PROG_SIZE, 'uint8');
+pc = 1; % Program Counter (Índice do vetor)
+
+[num_lines, ~] = size(source_code);
+
+for i = 1:num_lines
+    mnemonic = source_code{i, 1};
+    arg1     = source_code{i, 2};
+    
+    % Verifica se existe 3º argumento (para Timers/Contadores)
+    if size(source_code, 2) >= 3
+        arg2 = source_code{i, 3};
+    else
+        arg2 = '';
+    end
+
+    switch mnemonic
+        % --- Instruções de 0 Argumentos (1 Byte) ---
+        case 'END', op = ISA_END; len = 1;
+        case 'NOT', op = ISA_NOT; len = 1;
+            
+        % --- Instruções de 1 Argumento (2 Bytes) ---
+        case 'LD',  op = ISA_LD;  len = 2;
+        case 'LDN', op = ISA_LDN; len = 2;
+        case 'AND', op = ISA_AND; len = 2;
+        case 'OR',  op = ISA_OR;  len = 2;
+        case 'OUT', op = ISA_OUT; len = 2;
+        case 'SET', op = ISA_SET; len = 2;
+        case 'RST', op = ISA_RST; len = 2;
+            
+        % --- Instruções de 2 Argumentos (3 Bytes) ---
+        case 'TON', op = ISA_TON; len = 3;
+        case 'TOF', op = ISA_TOF; len = 3;
+        case 'TP',  op = ISA_TP; len = 3;
+        
+        case 'CTU',  op = ISA_CTU;  len = 3; % [OP] [ID] [PRESET]
+        case 'CTD',  op = ISA_CTD;  len = 3; % [OP] [ID] [dummy/PRESET]
+        case 'RSTC', op = ISA_RSTC; len = 2; % [OP] [ID]
+            
+        otherwise
+            error(['Comando desconhecido: ' mnemonic]);
+    end
+    
+    % --- Escrevendo na Memória ---
+    Program(pc) = op;
+    pc = pc + 1;
+    
+    if len >= 2
+        % LÓGICA DE ENDEREÇAMENTO AVANÇADA
+        val = 0;
+        
+        % Se for I0..I7, Q0..Q7, T0..T7
+        if ischar(arg1) && startsWith(arg1, {'I','Q','M','T'})
+             num = str2double(arg1(2:end));
+             
+             % Se for instrução de LEITURA (LD, AND, OR...) e o alvo for 'Q'
+             % Adicionamos o Offset 128 para diferenciar Saída de Entrada
+             is_read_inst = any(strcmp(mnemonic, {'LD','LDN','AND','OR'}));
+             
+             if is_read_inst && startsWith(arg1, 'Q')
+                 val = num + 128; % 128 = Flag de Output
+             else
+                 val = num;
+             end
+        else
+             val = str2double(arg1);
+        end
+        
+        Program(pc) = uint8(val);
+        pc = pc + 1;
+    end
+    
+    if len == 3
+        % Segundo argumento (Preset do Timer, etc)
+        val2 = str2double(arg2);
+        Program(pc) = uint8(val2);
+        pc = pc + 1;
+    end
+end
+
+% Feedback
+disp(['Compilação concluída! Tamanho: ' num2str(pc-1) ' bytes.']);
+disp('Vetor "Program" pronto para o Simulink.');
